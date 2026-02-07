@@ -134,6 +134,8 @@ namespace Server.MirObjects
         public List<string> NPCSpeech = new List<string>();
         public Dictionary<string, object> NPCData = new Dictionary<string, object>();
 
+        private bool StorageUnlocked;
+
         public bool UserMatch;
         public string MatchName;
         public ItemType MatchType;
@@ -989,7 +991,7 @@ namespace Server.MirObjects
         public void CheckQuestInfo(QuestInfo info)
         {
             if (Connection.SentQuestInfo.Contains(info)) return;
-            Enqueue(new S.NewQuestInfo { Info = info.CreateClientQuestInfo() });
+            Enqueue(new S.NewQuestInfo { Info = info.CreateClientQuestInfo(this) });
             Connection.SentQuestInfo.Add(info);
         }
         public void CheckRecipeInfo(RecipeInfo info)
@@ -1051,14 +1053,9 @@ namespace Server.MirObjects
 
             foreach (NPCObject npc in Envir.NPCs.Where(x => x.CurrentMap == map && x.Info.ShowOnBigMap).OrderBy(x => x.Info.BigMapIcon))
             {
-                info.NPCs.Add(new ClientNPCInfo()
-                {
-                    ObjectID = npc.ObjectID,
-                    Name = npc.Info.Name,
-                    Location = npc.Info.Location,
-                    Icon = npc.Info.BigMapIcon,
-                    CanTeleportTo = npc.Info.CanTeleportTo
-                });
+                ClientNPCInfo clientInfo = npc.Info.ClientInformation;
+                clientInfo.ObjectID = npc.ObjectID;
+                info.NPCs.Add(clientInfo);
             }
 
             Enqueue(new S.NewMapInfo { MapIndex = mapInfo.Index, Info = info });
@@ -1647,6 +1644,7 @@ namespace Server.MirObjects
             if (observer.Player != null)
                 observer.Player.StopGame(24);
         }
+
         protected virtual void GetItemInfo(MirConnection c)
         {
             UserItem item;
@@ -1712,6 +1710,9 @@ namespace Server.MirObjects
                 Stone = Account.Stone,
                 Jade = Account.Jade,
                 HasExpandedStorage = Account.ExpandedStorageExpiryDate > Envir.Now ? true : false,
+                HasStoragePassword = Account.HasStoragePassword,
+                RequireStoragePassword = Settings.RequireStoragePassword,
+                StoragePasswordLastSet = Account.StoragePasswordLastSet,
                 ExpandedStorageExpiryTime = Account.ExpandedStorageExpiryDate,
                 AllowObserve = AllowObserve,
                 Observer = c != Connection,
@@ -4320,6 +4321,7 @@ namespace Server.MirObjects
                         array = Info.Inventory;
                         break;
                     case MirGridType.Storage:
+                        if (!CanAccessStorage()) return text;
                         array = Info.AccountInfo.Storage;
                         break;
                     case MirGridType.HeroInventory:
@@ -5031,6 +5033,12 @@ namespace Server.MirObjects
                         return;
                     }
 
+                    if (!CanAccessStorage())
+                    {
+                        Enqueue(p);
+                        return;
+                    }
+
                     if (Info.Equipment[to] != null &&
                         Info.Equipment[to].Info.Bind.HasFlag(BindMode.DontStore))
                     {
@@ -5167,6 +5175,12 @@ namespace Server.MirObjects
                         return;
                     }
 
+                    if (!CanAccessStorage())
+                    {
+                        Enqueue(p);
+                        return;
+                    }
+
                     if (!Account.IsValidStorageIndex(to))
                     {
                         Enqueue(p);
@@ -5283,6 +5297,12 @@ namespace Server.MirObjects
                     }
 
                     if (ob == null || !Functions.InRange(ob.CurrentLocation, CurrentLocation, Globals.DataRange))
+                    {
+                        Enqueue(p);
+                        return;
+                    }
+
+                    if (!CanAccessStorage())
                     {
                         Enqueue(p);
                         return;
@@ -5426,6 +5446,12 @@ namespace Server.MirObjects
                         return;
                     }
 
+                    if (!CanAccessStorage())
+                    {
+                        Enqueue(p);
+                        return;
+                    }
+
                     if (!Account.IsValidStorageIndex(to) || !Account.IsValidStorageIndex(from))
                     {
                         Enqueue(p);
@@ -5503,6 +5529,11 @@ namespace Server.MirObjects
                 return;
             }
 
+            if (!CanAccessStorage())
+            {
+                Enqueue(p);
+                return;
+            }
 
             if (from < 0 || from >= Info.Inventory.Length)
             {
@@ -5579,6 +5610,11 @@ namespace Server.MirObjects
                 return;
             }
 
+            if (!CanAccessStorage())
+            {
+                Enqueue(p);
+                return;
+            }
 
             if (from < 0 || from >= Account.Storage.Length)
             {
@@ -5677,6 +5713,11 @@ namespace Server.MirObjects
                     }
 
                     if (ob == null || !Functions.InRange(ob.CurrentLocation, CurrentLocation, Globals.DataRange))
+                    {
+                        Enqueue(p);
+                        return;
+                    }
+                    if (!CanAccessStorage())
                     {
                         Enqueue(p);
                         return;
@@ -6462,6 +6503,11 @@ namespace Server.MirObjects
                         Enqueue(p);
                         return;
                     }
+                    if (!CanAccessStorage())
+                    {
+                        Enqueue(p);
+                        return;
+                    }
                     array = Account.Storage;
                     break;
                 default:
@@ -6587,6 +6633,11 @@ namespace Server.MirObjects
                         Enqueue(p);
                         return;
                     }
+                    if (!CanAccessStorage())
+                    {
+                        Enqueue(p);
+                        return;
+                    }
                     arrayFrom = Account.Storage;
                     break;
                 case MirGridType.Equipment:
@@ -6642,6 +6693,11 @@ namespace Server.MirObjects
                     }
 
                     if (ob == null || !Functions.InRange(ob.CurrentLocation, CurrentLocation, Globals.DataRange))
+                    {
+                        Enqueue(p);
+                        return;
+                    }
+                    if (!CanAccessStorage())
                     {
                         Enqueue(p);
                         return;
@@ -7612,6 +7668,36 @@ namespace Server.MirObjects
                 ReceiveChat(GameLanguage.ServerTextMap.GetLocalization(ServerTextKeys.CannotPickupNotOwner), ChatType.System);
 
         }
+        public void RequestItemInfo(int itemIndex)
+        {
+            if (itemIndex <= 0 || Connection == null) return;
+
+            var info = Envir.GetItemInfo(itemIndex);
+            if (info == null) return;
+
+            Connection.CheckItemInfo(info);
+        }
+
+        public void RequestMonsterInfo(int monsterIndex)
+        {
+            if (monsterIndex <= 0 || Connection == null) return;
+
+            var info = Envir.GetMonsterInfo(monsterIndex);
+            if (info == null) return;
+
+            Connection.CheckMonsterInfo(info);
+        }
+
+        public void RequestNPCInfo(int npcIndex)
+        {
+            if (npcIndex <= 0 || Connection == null) return;
+
+            var info = Envir.GetNPCInfo(npcIndex);
+            if (info == null) return;
+
+            Connection.CheckNPCInfo(info);
+        }
+
         public void RequestMapInfo(int mapIndex)
         {
             var info = Envir.GetMapInfo(mapIndex);
@@ -7787,6 +7873,7 @@ namespace Server.MirObjects
                     array = Info.Inventory;
                     break;
                 case MirGridType.Storage:
+                    if (!CanAccessStorage()) return false;
                     array = Account.Storage;
                     break;
                 case MirGridType.HeroInventory:
@@ -8239,6 +8326,12 @@ namespace Server.MirObjects
         }
         public void SendStorage()
         {
+            if (Settings.RequireStoragePassword && Account != null && Account.HasStoragePassword && !StorageUnlocked)
+            {
+                Connection.StorageSent = false;
+                return;
+            }
+
             if (Connection.StorageSent) return;
             Connection.StorageSent = true;
 
@@ -8251,6 +8344,38 @@ namespace Server.MirObjects
             }
 
             Enqueue(new S.UserStorage { Storage = Account.Storage }); // Should be no alter before being sent.
+        }
+
+        public void ResetStorageUnlock()
+        {
+            StorageUnlocked = false;
+        }
+
+        public void SetStorageUnlocked(bool unlocked)
+        {
+            StorageUnlocked = unlocked;
+        }
+
+        public bool TryUnlockStorage(string password)
+        {
+            if (Account == null) return false;
+            if (!Account.HasStoragePassword)
+            {
+                StorageUnlocked = true;
+                return true;
+            }
+
+            if (!Account.ValidateStoragePassword(password)) return false;
+
+            StorageUnlocked = true;
+            return true;
+        }
+
+        private bool CanAccessStorage()
+        {
+            if (!Settings.RequireStoragePassword) return true;
+
+            return Account == null || !Account.HasStoragePassword || StorageUnlocked;
         }
 
         #endregion
@@ -9078,6 +9203,11 @@ namespace Server.MirObjects
         {
             if (type == AwakeType.None) return;
 
+            if (Awake.AwakeMaterials.Count < (int)type)
+            {
+                return;
+            }
+
             foreach (UserItem item in Info.Inventory)
             {
                 if (item != null)
@@ -9088,6 +9218,12 @@ namespace Server.MirObjects
 
                         byte[] materialCount = new byte[2];
                         int idx = 0;
+
+                        if (Awake.AwakeMaterialRate.Length < (int)item.Info.Grade)
+                        {
+                            continue;
+                        }
+
                         foreach (List<byte> material in Awake.AwakeMaterials[(int)type - 1])
                         {
                             byte materialRate = (byte)(Awake.AwakeMaterialRate[(int)item.Info.Grade - 1] * (float)awake.GetAwakeLevel());

@@ -59,6 +59,8 @@ namespace Server.MirNetwork
         public MirConnection Observing;
 
         public List<ItemInfo> SentItemInfo = new List<ItemInfo>();
+        public List<MonsterInfo> SentMonsterInfo = new List<MonsterInfo>();
+        public List<NPCInfo> SentNPCInfo = new List<NPCInfo>();
         public List<QuestInfo> SentQuestInfo = new List<QuestInfo>();
         public List<RecipeInfo> SentRecipeInfo = new List<RecipeInfo>();
         public List<UserItem> SentChatItem = new List<UserItem>(); //TODO - Add Expiry time
@@ -302,6 +304,15 @@ namespace Server.MirNetwork
                 case (short)ClientPacketIds.ChangePassword:
                     ChangePassword((C.ChangePassword) p);
                     break;
+                case (short)ClientPacketIds.UnlockStorage:
+                    UnlockStorage((C.UnlockStorage)p);
+                    break;
+                case (short)ClientPacketIds.SetStoragePassword:
+                    SetStoragePassword((C.SetStoragePassword)p);
+                    break;
+                case (short)ClientPacketIds.RemoveStoragePassword:
+                    RemoveStoragePassword((C.RemoveStoragePassword)p);
+                    break;
                 case (short)ClientPacketIds.Login:
                     Login((C.Login) p);
                     break;
@@ -397,6 +408,15 @@ namespace Server.MirNetwork
                     break;
                 case (short)ClientPacketIds.RequestMapInfo:
                     RequestMapInfo((C.RequestMapInfo)p);
+                    break;
+                case (short)ClientPacketIds.RequestMonsterInfo:
+                    RequestMonsterInfo((C.RequestMonsterInfo)p);
+                    break;
+                case (short)ClientPacketIds.RequestNPCInfo:
+                    RequestNPCInfo((C.RequestNPCInfo)p);
+                    break;
+                case (short)ClientPacketIds.RequestItemInfo:
+                    RequestItemInfo((C.RequestItemInfo)p);
                     break;
                 case (short)ClientPacketIds.TeleportToNPC:
                     TeleportToNPC((C.TeleportToNPC)p);
@@ -883,6 +903,136 @@ namespace Server.MirNetwork
             MessageQueue.Enqueue(GameLanguage.ServerTextMap.GetLocalization((ServerTextKeys.PasswordBeingChanged), SessionID, IPAddress));
             Envir.ChangePassword(p, this);
         }
+        private void UnlockStorage(C.UnlockStorage p)
+        {
+            if (Stage != GameStage.Game || Player == null || Account == null)
+            {
+                Enqueue(new S.StorageUnlockResult { Result = 3, HasPassword = Account != null && Account.HasStoragePassword });
+                return;
+            }
+
+            if (!CanAccessStorageNpc())
+            {
+                Enqueue(new S.StorageUnlockResult { Result = 3, HasPassword = Account.HasStoragePassword });
+                return;
+            }
+
+            if (!Account.HasStoragePassword)
+            {
+                Player.SetStorageUnlocked(true);
+                Enqueue(new S.StorageUnlockResult { Result = 4, HasPassword = false });
+                return;
+            }
+
+            if (!Envir.IsPasswordValid(p.Password))
+            {
+                Enqueue(new S.StorageUnlockResult { Result = 1, HasPassword = true });
+                return;
+            }
+
+            if (!Account.ValidateStoragePassword(p.Password))
+            {
+                Enqueue(new S.StorageUnlockResult { Result = 2, HasPassword = true });
+                return;
+            }
+
+            Player.SetStorageUnlocked(true);
+            Enqueue(new S.StorageUnlockResult { Result = 0, HasPassword = true });
+            Player.SendStorage();
+        }
+        private void SetStoragePassword(C.SetStoragePassword p)
+        {
+            if (Stage != GameStage.Game || Player == null || Account == null)
+            {
+                Enqueue(new S.StoragePasswordResult { Result = 0, Removing = false, HasPassword = Account != null && Account.HasStoragePassword, LastSetTime = Account?.StoragePasswordLastSet ?? DateTime.MinValue });
+                return;
+            }
+
+            if (!CanAccessStorageNpc())
+            {
+                Enqueue(new S.StoragePasswordResult { Result = 0, Removing = false, HasPassword = Account.HasStoragePassword, LastSetTime = Account.StoragePasswordLastSet });
+                return;
+            }
+
+            if (!Envir.IsPasswordValid(p.NewPassword))
+            {
+                Enqueue(new S.StoragePasswordResult { Result = 3, Removing = false, HasPassword = Account.HasStoragePassword, LastSetTime = Account.StoragePasswordLastSet });
+                return;
+            }
+
+            if (Account.HasStoragePassword)
+            {
+                if (!Envir.IsPasswordValid(p.CurrentPassword))
+                {
+                    Enqueue(new S.StoragePasswordResult { Result = 1, Removing = false, HasPassword = true, LastSetTime = Account.StoragePasswordLastSet });
+                    return;
+                }
+
+                if (!Account.ValidateStoragePassword(p.CurrentPassword))
+                {
+                    Enqueue(new S.StoragePasswordResult { Result = 2, Removing = false, HasPassword = true, LastSetTime = Account.StoragePasswordLastSet });
+                    return;
+                }
+            }
+
+            Account.StoragePassword = p.NewPassword;
+            Account.StoragePasswordLastSet = Envir.Now;
+            Player.SetStorageUnlocked(true);
+            Enqueue(new S.StoragePasswordResult { Result = 4, Removing = false, HasPassword = true, LastSetTime = Account.StoragePasswordLastSet });
+        }
+        private void RemoveStoragePassword(C.RemoveStoragePassword p)
+        {
+            if (Stage != GameStage.Game || Player == null || Account == null)
+            {
+                Enqueue(new S.StoragePasswordResult { Result = 0, Removing = true, HasPassword = Account != null && Account.HasStoragePassword, LastSetTime = Account?.StoragePasswordLastSet ?? DateTime.MinValue });
+                return;
+            }
+
+            if (!CanAccessStorageNpc())
+            {
+                Enqueue(new S.StoragePasswordResult { Result = 0, Removing = true, HasPassword = Account.HasStoragePassword, LastSetTime = Account.StoragePasswordLastSet });
+                return;
+            }
+
+            if (!Account.HasStoragePassword)
+            {
+                Enqueue(new S.StoragePasswordResult { Result = 5, Removing = true, HasPassword = false, LastSetTime = DateTime.MinValue });
+                return;
+            }
+
+            if (!Envir.IsPasswordValid(p.CurrentPassword))
+            {
+                Enqueue(new S.StoragePasswordResult { Result = 1, Removing = true, HasPassword = true, LastSetTime = Account.StoragePasswordLastSet });
+                return;
+            }
+
+            if (!Account.ValidateStoragePassword(p.CurrentPassword))
+            {
+                Enqueue(new S.StoragePasswordResult { Result = 2, Removing = true, HasPassword = true, LastSetTime = Account.StoragePasswordLastSet });
+                return;
+            }
+
+            Account.ClearStoragePassword();
+            Player.SetStorageUnlocked(true);
+            Enqueue(new S.StoragePasswordResult { Result = 4, Removing = true, HasPassword = false, LastSetTime = DateTime.MinValue });
+        }
+        private bool CanAccessStorageNpc()
+        {
+            if (Player == null) return false;
+
+            if (Player.NPCPage == null || !String.Equals(Player.NPCPage.Key, NPCScript.StorageKey, StringComparison.CurrentCultureIgnoreCase))
+                return false;
+
+            NPCObject ob = null;
+            for (int i = 0; i < Player.CurrentMap.NPCs.Count; i++)
+            {
+                if (Player.CurrentMap.NPCs[i].ObjectID != Player.NPCObjectID) continue;
+                ob = Player.CurrentMap.NPCs[i];
+                break;
+            }
+
+            return ob != null && Functions.InRange(ob.CurrentLocation, Player.CurrentLocation, Globals.DataRange);
+        }
         private void Login(C.Login p)
         {
             if (Stage != GameStage.Login) return;
@@ -1232,6 +1382,27 @@ namespace Server.MirNetwork
             if (Stage != GameStage.Game) return;
 
             Player.RequestMapInfo(p.MapIndex);
+        }
+
+        private void RequestMonsterInfo(C.RequestMonsterInfo p)
+        {
+            if (Stage != GameStage.Game) return;
+
+            Player.RequestMonsterInfo(p.MonsterIndex);
+        }
+
+        private void RequestNPCInfo(C.RequestNPCInfo p)
+        {
+            if (Stage != GameStage.Game) return;
+
+            Player.RequestNPCInfo(p.NPCIndex);
+        }
+
+        private void RequestItemInfo(C.RequestItemInfo p)
+        {
+            if (Stage != GameStage.Game) return;
+
+            Player.RequestItemInfo(p.ItemIndex);
         }
 
         private void TeleportToNPC(C.TeleportToNPC p)
@@ -2129,6 +2300,42 @@ namespace Server.MirNetwork
             if (SentItemInfo.Contains(info)) return;
             Enqueue(new S.NewItemInfo { Info = info });
             SentItemInfo.Add(info);
+        }
+
+        public void CheckMonsterInfo(int monsterIndex)
+        {
+            CheckMonsterInfo(Envir.GetMonsterInfo(monsterIndex));
+        }
+
+        public void CheckMonsterInfo(MonsterInfo info)
+        {
+            if (info == null) return;
+
+            foreach (MirConnection observer in Observers)
+                observer.CheckMonsterInfo(info);
+
+            if (SentMonsterInfo.Contains(info)) return;
+
+            Enqueue(new S.NewMonsterInfo { Info = info.ClientInformation });
+            SentMonsterInfo.Add(info);
+        }
+
+        public void CheckNPCInfo(int npcIndex)
+        {
+            CheckNPCInfo(Envir.GetNPCInfo(npcIndex));
+        }
+
+        public void CheckNPCInfo(NPCInfo info)
+        {
+            if (info == null) return;
+
+            foreach (MirConnection observer in Observers)
+                observer.CheckNPCInfo(info);
+
+            if (SentNPCInfo.Contains(info)) return;
+
+            Enqueue(new S.NewNPCInfo { Info = info.ClientInformation });
+            SentNPCInfo.Add(info);
         }
         public void CheckItem(UserItem item)
         {

@@ -31,6 +31,7 @@ namespace Server
             StartGameCheckBox.Checked = Settings.AllowStartGame;
             AllowAssassinCheckBox.Checked = Settings.AllowCreateAssassin;
             AllowArcherCheckBox.Checked = Settings.AllowCreateArcher;
+            WarehousePasswordCheckBox.Checked = Settings.RequireStoragePassword;
             Resolution_textbox.Text = Settings.AllowedResolution.ToString();
             ObserveCheckBox.Checked = Settings.AllowObserve;
             AllowCodexCheckBox.Checked = Settings.AllowCodex;
@@ -107,6 +108,7 @@ namespace Server
             Settings.AllowStartGame = StartGameCheckBox.Checked;
             Settings.AllowCreateAssassin = AllowAssassinCheckBox.Checked;
             Settings.AllowCreateArcher = AllowArcherCheckBox.Checked;
+            Settings.RequireStoragePassword = WarehousePasswordCheckBox.Checked;
             Settings.AllowObserve = ObserveCheckBox.Checked;
             Settings.AllowCodex = AllowCodexCheckBox.Checked;
 

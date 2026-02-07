@@ -31,6 +31,21 @@ namespace Server.MirDatabase
 
         public byte[] Salt = new byte[24];
 
+        private string storagePassword = string.Empty;
+        public string StoragePassword
+        {
+            get { return storagePassword; }
+            set
+            {
+                StorageSalt = Crypto.GenerateSalt();
+                storagePassword = Crypto.HashPassword(value, StorageSalt);
+            }
+        }
+
+        public byte[] StorageSalt = new byte[24];
+        public bool HasStoragePassword => !string.IsNullOrEmpty(storagePassword);
+        public DateTime StoragePasswordLastSet = DateTime.MinValue;
+
         public string UserName = string.Empty;
         public DateTime BirthDate;
         public string SecretQuestion = string.Empty;
@@ -97,6 +112,13 @@ namespace Server.MirDatabase
 
             if (Envir.LoadVersion > 97)
                 RequirePasswordChange = reader.ReadBoolean();
+
+            if (Envir.LoadVersion >= 117)
+            {
+                storagePassword = reader.ReadString();
+                StorageSalt = reader.ReadBytes(reader.ReadInt32());
+                StoragePasswordLastSet = DateTime.FromBinary(reader.ReadInt64());
+            }
 
             UserName = reader.ReadString();
             BirthDate = DateTime.FromBinary(reader.ReadInt64());
@@ -192,6 +214,11 @@ namespace Server.MirDatabase
             writer.Write(Salt);
             writer.Write(RequirePasswordChange);
 
+            writer.Write(storagePassword);
+            writer.Write(StorageSalt.Length);
+            writer.Write(StorageSalt);
+            writer.Write(StoragePasswordLastSet.ToBinary());
+
             writer.Write(UserName);
             writer.Write(BirthDate.ToBinary());
             writer.Write(SecretQuestion);
@@ -265,6 +292,20 @@ namespace Server.MirDatabase
                     return false;
             }
             return true;
+        }
+
+        public bool ValidateStoragePassword(string rawPassword)
+        {
+            if (string.IsNullOrEmpty(storagePassword)) return false;
+
+            var hashed = Crypto.HashPassword(rawPassword, StorageSalt);
+            return string.CompareOrdinal(storagePassword, hashed) == 0;
+        }
+
+        public void ClearStoragePassword()
+        {
+            storagePassword = string.Empty;
+            StoragePasswordLastSet = DateTime.MinValue;
         }
     }
 }
